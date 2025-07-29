@@ -12,10 +12,13 @@
 
 typedef struct erow {
     int size;
+    int rsize;
     char *chars;
+    char *torender;
 } erow;
 
 enum editor_key {
+    BACKSPACE = 127,
     ARROW_LEFT = 1000,
     ARROW_UP = 1001,
     ARROW_RIGHT = 1002,
@@ -96,7 +99,14 @@ int getWindowSize(int *rows, int *cols) {
 }
 
 void editor_update_row(erow *row) {
-    
+    free(row->torender);
+    row->torender = malloc(row->size + 1);
+    int idx = 0;
+    for (int j = 0; j < row->size; j++) {
+        row->torender[idx++] = row->chars[j];
+    }
+    row->torender[idx] = '\0';
+    row->rsize = idx;
 }
 
 void editor_append_row(char *line, int linelen) {
@@ -106,6 +116,11 @@ void editor_append_row(char *line, int linelen) {
     E.row[end].chars = malloc(linelen + 1);
     memcpy(E.row[end].chars, line, linelen);
     E.row[end].chars[linelen] = '\0';
+    E.row[end].rsize = 0;
+    E.row[end].torender = NULL;
+
+    editor_update_row(&E.row[end]);
+
     E.numrows++;
 }
 
@@ -113,10 +128,28 @@ void editor_row_insert_char(erow *row, int at, int c) {
     if (at < 0 || at > row->size) 
         at = row->size;
     row->chars = realloc(row->chars, row->size + 2);
-    memmove(row->chars[at + 1], row->chars[at], row->size - at + 1);
+    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
     row->size++;
     row->chars[at] = c;
     row->chars[row->size] = '\0';
+    editor_update_row(row);
+}
+
+void editorInsertChar(int c) {
+    if (E.cy == E.numrows)
+        editor_append_row("", 0);
+    editor_row_insert_char(&E.row[E.cy], E.cx, c);
+    E.cx++;
+}
+
+void editor_remove_char() {
+    erow *row = &E.row[E.cy];
+    int at = E.cx;
+    row->chars = realloc(row->chars, row->size);
+    memmove(&row->chars[at-1], &row->chars[at], row->size - at + 1);
+    row->size--;
+    E.cx--;
+    editor_update_row(row);
 }
 
 void editorOpen(char *filename) {
@@ -157,12 +190,6 @@ void abFree(struct abuf *ab) {
 }
 
 void editorScroll() {
-    char msg[80];
-    int msglen = snprintf(msg, sizeof(msg), "Cy: %d, Ro: %d", E.cy, E.rowoff);
-    E.row[1].chars = malloc(msglen + 1);
-    memcpy(E.row[1].chars, msg, msglen);
-    E.row[1].size = msglen;
-    E.row[1].chars[msglen] = '\0';
     if (E.cy < E.rowoff) {
         E.rowoff = E.cy;
     }
@@ -181,15 +208,18 @@ void editor_draw_rows(struct abuf *wbatch) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "$ Bloc editor\r\n");
                 abAppend(wbatch, welcome, welcomelen);
-            } else
+            } else {
                 abAppend(wbatch, "$\r\n", 3);
+            }
             abAppend(wbatch, "\x1b[K", 3); // Erase the right part of the line
         } else {
-            int len = E.row[filerow-1].size;
+            int len = E.row[filerow-1].rsize;
             if (len > E.screencols) 
                 len = E.screencols;
-            abAppend(wbatch, "$ ", 2);
-            abAppend(wbatch, E.row[filerow-1].chars, len);
+            char curline[32];
+            int curlinelen = snprintf(curline, sizeof(curline), "%4d ", filerow);
+            abAppend(wbatch, curline, curlinelen);
+            abAppend(wbatch, E.row[filerow-1].torender, len);
             abAppend(wbatch, "\r\n", 2);
             abAppend(wbatch, "\x1b[K", 3);
         }
@@ -201,8 +231,8 @@ void editor_draw_rows(struct abuf *wbatch) {
 void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, "\x1b[7m", 4);
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines",
-        E.filename ? E.filename : "[No Name]", E.numrows);
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines. Cy: %d, Cx: %d",
+        E.filename ? E.filename : "[No Name]", E.numrows, E.cy, E.cx);
     int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d",
         E.cy + 1, E.numrows);
     if (len > E.screencols) 
@@ -231,7 +261,7 @@ void editor_refresh_screen() {
     editorDrawStatusBar(&wbatch);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 2, E.cx + 1);
     abAppend(&wbatch, buf, strlen(buf));
 
     abAppend(&wbatch, "\x1b[?25h", 6); // Show cursor
@@ -275,6 +305,12 @@ void editor_process_key() {
     int c = editor_read_key();
 
     switch (c) {
+        case '\r':
+            /* TODO */
+            break;
+        case BACKSPACE:
+            editor_remove_char();
+            break;
         case CTRL_KEY('e'):
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
@@ -287,13 +323,14 @@ void editor_process_key() {
             editorMoveCursor(c);
             break;
         default:
+            editorInsertChar(c);
             break;
     }
 }
 
 void init_editor() {
     E.cx = 2;
-    E.cy = 1;
+    E.cy = 0;
     E.numrows = 0;
     E.rowoff = 1;
     E.row = NULL;
