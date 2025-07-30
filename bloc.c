@@ -2,13 +2,16 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <termios.h>
+#include <stdarg.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <string.h>
-
 #define CTRL_KEY(k) ((k) & 0x1f)
+
+void editor_set_status_message(const char *msg, ...);
 
 typedef struct erow {
     int size;
@@ -31,7 +34,10 @@ struct editorConfig {
     int screencols;
     int rowoff;
     int numrows;
+    int reserved_x;
+    int reserved_y;
     char *filename;
+    char statusmsg[80];
     erow *row;
     struct termios orig_terminal_config;
 } E;
@@ -152,6 +158,22 @@ void editor_remove_char() {
     editor_update_row(row);
 }
 
+char *editor_rows_to_string(int *buflen) {
+    int total_len = 0;
+    int j;
+    for (j = 0; j < E.numrows; j++)
+        total_len += E.row[j].size + 1;
+    *buflen = total_len;
+    char *buf = malloc(total_len);
+    char *p = buf;
+    for (j = 0; j < E.numrows; j++) {
+        memcpy(p, E.row[j].chars, E.row[j].size);
+        p += E.row[j].size;
+        *p++ = '\n';
+    }
+    return buf;
+}
+
 void editorOpen(char *filename) {
     free(E.filename);
     E.filename = strdup(filename);
@@ -169,6 +191,19 @@ void editorOpen(char *filename) {
     }
     free(line);
     fclose(fp);
+}
+
+void editor_save() {
+    if (E.filename == NULL) return;
+    int len;
+    char *buf = editor_rows_to_string(&len);
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+    ftruncate(fd, len);
+    write(fd, buf, len);
+    close(fd);
+    editor_set_status_message
+("File Saved!");
+    free(buf);
 }
 
 struct abuf {
@@ -193,8 +228,8 @@ void editorScroll() {
     if (E.cy < E.rowoff) {
         E.rowoff = E.cy;
     }
-    if (E.cy >= E.rowoff + E.screenrows) {
-        E.rowoff = E.cy - E.screenrows + 1;
+    if (E.cy + E.reserved_y >= E.rowoff + E.screenrows) {
+        E.rowoff = E.cy + E.reserved_y - E.screenrows + 1;
     }
 }
 
@@ -224,7 +259,6 @@ void editor_draw_rows(struct abuf *wbatch) {
             abAppend(wbatch, "\x1b[K", 3);
         }
     }
-    abAppend(wbatch, "*", 1);
     abAppend(wbatch, "\x1b[K", 3);
 }
 
@@ -248,6 +282,23 @@ void editorDrawStatusBar(struct abuf *ab) {
         }
     }
     abAppend(ab, "\x1b[m", 3);
+    abAppend(ab, "\r\n", 2);
+}
+
+void editorDrawMessageBar(struct abuf *ab) {
+    abAppend(ab, "\x1b[7m", 4);
+    abAppend(ab, "\x1b[K", 3); // Clear the line before writing
+    int msglen = strlen(E.statusmsg);
+    if (msglen > E.screencols) msglen = E.screencols;
+    abAppend(ab, E.statusmsg, msglen);
+    abAppend(ab, "\x1b[m", 3);
+}
+
+void editor_set_status_message(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+    va_end(ap);
 }
 
 void editor_refresh_screen() {
@@ -259,9 +310,10 @@ void editor_refresh_screen() {
 
     editor_draw_rows(&wbatch);
     editorDrawStatusBar(&wbatch);
+    editorDrawMessageBar(&wbatch);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 2, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 2, E.cx + 5);
     abAppend(&wbatch, buf, strlen(buf));
 
     abAppend(&wbatch, "\x1b[?25h", 6); // Show cursor
@@ -311,6 +363,9 @@ void editor_process_key() {
         case BACKSPACE:
             editor_remove_char();
             break;
+        case CTRL_KEY('s'):
+            editor_save();
+            break;
         case CTRL_KEY('e'):
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
@@ -333,11 +388,14 @@ void init_editor() {
     E.cy = 0;
     E.numrows = 0;
     E.rowoff = 1;
+    E.statusmsg[0] = '\0';
     E.row = NULL;
+    E.reserved_x = 4;
+    E.reserved_y = 2;
     E.filename = NULL;
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
-    E.screenrows--;
+    E.screenrows -= 2;
 }
 
 int main(int argc, char *argv[]) {
@@ -347,6 +405,7 @@ int main(int argc, char *argv[]) {
     if (argc >= 2)
         editorOpen(argv[1]);
 
+    editor_set_status_message("HELP: Ctrl-s = save, Ctrl-e = exit");
     while (1) {
         editor_refresh_screen();
         editor_process_key();
