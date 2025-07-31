@@ -35,7 +35,9 @@ struct editorConfig {
     int rowoff;
     int numrows;
     int reserved_x;
+    int indent_x;
     int reserved_y;
+    int diffs;
     char *filename;
     char statusmsg[80];
     erow *row;
@@ -95,9 +97,9 @@ int editor_read_key() {
 
 int getWindowSize(int *rows, int *cols) {
     struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
         return -1;
-    } else {
+    else {
         *cols = ws.ws_col;
         *rows = ws.ws_row;
         return 0;
@@ -108,9 +110,8 @@ void editor_update_row(erow *row) {
     free(row->torender);
     row->torender = malloc(row->size + 1);
     int idx = 0;
-    for (int j = 0; j < row->size; j++) {
+    for (int j = 0; j < row->size; j++)
         row->torender[idx++] = row->chars[j];
-    }
     row->torender[idx] = '\0';
     row->rsize = idx;
 }
@@ -131,6 +132,7 @@ void editor_append_row(char *line, int linelen) {
 }
 
 void editor_row_insert_char(erow *row, int at, int c) {
+    at -= E.reserved_x;
     if (at < 0 || at > row->size) 
         at = row->size;
     row->chars = realloc(row->chars, row->size + 2);
@@ -148,14 +150,24 @@ void editorInsertChar(int c) {
     E.cx++;
 }
 
-void editor_remove_char() {
-    erow *row = &E.row[E.cy];
-    int at = E.cx;
-    row->chars = realloc(row->chars, row->size);
-    memmove(&row->chars[at-1], &row->chars[at], row->size - at + 1);
+void editor_row_del_char(erow *row, int at) {
+    at -= E.reserved_x;
+    if (at < 0 || at >= row->size) 
+        return;
+    memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
     row->size--;
-    E.cx--;
     editor_update_row(row);
+    E.diffs++;
+}
+
+void editor_del_char() {
+    if (E.cy == E.numrows)
+        return;
+    erow *row = &E.row[E.cy];
+    if (E.cx > E.reserved_x) {
+        editor_row_del_char(row, E.cx - 1);
+        E.cx--;
+    }
 }
 
 char *editor_rows_to_string(int *buflen) {
@@ -201,8 +213,7 @@ void editor_save() {
     ftruncate(fd, len);
     write(fd, buf, len);
     close(fd);
-    editor_set_status_message
-("File Saved!");
+    editor_set_status_message("File Saved!");
     free(buf);
 }
 
@@ -225,12 +236,11 @@ void abFree(struct abuf *ab) {
 }
 
 void editorScroll() {
-    if (E.cy < E.rowoff) {
+    if (E.cy < E.rowoff)
         E.rowoff = E.cy;
-    }
-    if (E.cy + E.reserved_y >= E.rowoff + E.screenrows) {
+
+    if (E.cy + E.reserved_y >= E.rowoff + E.screenrows)
         E.rowoff = E.cy + E.reserved_y - E.screenrows + 1;
-    }
 }
 
 void editor_draw_rows(struct abuf *wbatch) {
@@ -238,26 +248,26 @@ void editor_draw_rows(struct abuf *wbatch) {
     int filerow;
     for (int y = 1; y < E.screenrows - 1; y++) {
         filerow = y + E.rowoff;
+        char curline[32];
+        int curlinelen = snprintf(curline, sizeof(curline), "%4d ", filerow);
+        abAppend(wbatch, curline, curlinelen);
         if (filerow > E.numrows) {
             if (E.numrows == 0 && y == 5) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "$ Bloc editor\r\n");
                 abAppend(wbatch, welcome, welcomelen);
             } else {
-                abAppend(wbatch, "$\r\n", 3);
+                abAppend(wbatch, "\r\n", 3);
             }
-            abAppend(wbatch, "\x1b[K", 3); // Erase the right part of the line
         } else {
             int len = E.row[filerow-1].rsize;
             if (len > E.screencols) 
                 len = E.screencols;
-            char curline[32];
-            int curlinelen = snprintf(curline, sizeof(curline), "%4d ", filerow);
-            abAppend(wbatch, curline, curlinelen);
             abAppend(wbatch, E.row[filerow-1].torender, len);
+            abAppend(wbatch, "\x1b[K", 3); // Erase the right part of the line
             abAppend(wbatch, "\r\n", 2);
-            abAppend(wbatch, "\x1b[K", 3);
         }
+        abAppend(wbatch, "\x1b[K", 3); // Erase the right part of the line
     }
     abAppend(wbatch, "\x1b[K", 3);
 }
@@ -281,17 +291,19 @@ void editorDrawStatusBar(struct abuf *ab) {
             len++;
         }
     }
-    abAppend(ab, "\x1b[m", 3);
+    abAppend(ab, "\x1b[m", 3); // Reset text formatting
     abAppend(ab, "\r\n", 2);
 }
 
 void editorDrawMessageBar(struct abuf *ab) {
-    abAppend(ab, "\x1b[7m", 4);
+    abAppend(ab, "\x1b[7m", 4); // Invert background and foreground colors
     abAppend(ab, "\x1b[K", 3); // Clear the line before writing
     int msglen = strlen(E.statusmsg);
     if (msglen > E.screencols) msglen = E.screencols;
     abAppend(ab, E.statusmsg, msglen);
-    abAppend(ab, "\x1b[m", 3);
+    while (msglen++ < E.screencols)
+        abAppend(ab, " ", 1);
+    abAppend(ab, "\x1b[m", 3); // Reset text formatting
 }
 
 void editor_set_status_message(const char *fmt, ...) {
@@ -313,7 +325,7 @@ void editor_refresh_screen() {
     editorDrawMessageBar(&wbatch);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 2, E.cx + 5);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 2, E.cx + 1);
     abAppend(&wbatch, buf, strlen(buf));
 
     abAppend(&wbatch, "\x1b[?25h", 6); // Show cursor
@@ -327,7 +339,7 @@ void editorMoveCursor(int key) {
 
     switch (key) {
         case ARROW_LEFT:
-            if (E.cx != 0)
+            if (E.cx > 0)
                 E.cx--; 
             else if (E.cy > 0) {
                 E.cy--;
@@ -335,11 +347,11 @@ void editorMoveCursor(int key) {
             }
             break;
         case ARROW_RIGHT:
-            if (row && E.cx < row->size)
+            if (row && E.cx < row->size + E.reserved_x)
                 E.cx++;
-            else if (row && E.cx == row->size) {
+            else if (row && E.cx == row->size + E.reserved_x) {
                 E.cy++;
-                E.cx = 0;   
+                E.cx = E.reserved_x + E.indent_x;   
             }
             break;
         case ARROW_UP:
@@ -361,7 +373,7 @@ void editor_process_key() {
             /* TODO */
             break;
         case BACKSPACE:
-            editor_remove_char();
+            editor_del_char();
             break;
         case CTRL_KEY('s'):
             editor_save();
@@ -384,14 +396,16 @@ void editor_process_key() {
 }
 
 void init_editor() {
-    E.cx = 2;
+    E.reserved_x = 4;
+    E.reserved_y = 2;
+    E.indent_x = 1;
+    E.cx = E.reserved_x + 1;
     E.cy = 0;
     E.numrows = 0;
     E.rowoff = 1;
     E.statusmsg[0] = '\0';
     E.row = NULL;
-    E.reserved_x = 4;
-    E.reserved_y = 2;
+    E.diffs = 0;
     E.filename = NULL;
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
