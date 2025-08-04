@@ -154,18 +154,19 @@ void editor_insert_char(int c) {
 }
 
 void editor_insert_newline() {
-    if (E.cx == 0) {
+    if (E.cx <= E.reserved_x) {
         editor_insert_row(E.cy, "", 0);
     } else {
         erow *row = &E.row[E.cy];
-        editor_insert_row(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
+        int editorcursor = E.cx - E.reserved_x - E.indent_x + 1;
+        editor_insert_row(E.cy + 1, &row->chars[editorcursor], row->size - editorcursor);
         row = &E.row[E.cy];
-        row->size = E.cx;
+        row->size = editorcursor;
         row->chars[row->size] = '\0';
         editor_update_row(row);
     }
     E.cy++;
-    E.cx = E.reserved_x + 1;
+    E.cx = E.reserved_x + E.indent_x - 1;
 }
 
 void editor_row_del_char(erow *row, int at) {
@@ -178,13 +179,34 @@ void editor_row_del_char(erow *row, int at) {
     E.diffs++;
 }
 
+void editor_join_rows() {
+    if (E.cy == 0) 
+        return;
+    erow *prev = &E.row[E.cy - 1];
+    erow *curr = &E.row[E.cy];
+    prev->chars = realloc(prev->chars, prev->size + curr->size);
+    for (int j = 0; j < curr->size; j++)
+        prev->chars[prev->size + j] = curr->chars[j];
+    prev->chars[prev->size + curr->size] = '\0';
+    prev->size += curr->size;
+    free(curr->chars);
+    free(curr->torender);
+    memmove(&E.row[E.cy], &E.row[E.cy + 1], sizeof(erow) * (E.numrows - E.cy - 1));
+    E.numrows--;
+    editor_update_row(prev);
+    E.cy--;
+}
+
 void editor_del_char() {
     if (E.cy == E.numrows)
         return;
     erow *row = &E.row[E.cy];
-    if (E.cx > E.reserved_x) {
+    if (E.cx > E.reserved_x + E.indent_x - 1) {
         editor_row_del_char(row, E.cx - 1);
         E.cx--;
+    } else if (E.cx == E.reserved_x + E.indent_x - 1) {
+        editor_join_rows();
+        E.cx = E.row[E.cy].size + E.reserved_x;
     }
 }
 
@@ -357,11 +379,11 @@ void editor_move_cursor(int key) {
 
     switch (key) {
         case ARROW_LEFT:
-            if (E.cx > 0)
+            if (E.cx > E.reserved_x)
                 E.cx--; 
             else if (E.cy > 0) {
                 E.cy--;
-                E.cx = E.row[E.cy].size;
+                E.cx = E.row[E.cy].size + E.reserved_x + E.indent_x;
             }
             break;
         case ARROW_RIGHT:
@@ -389,7 +411,6 @@ void editor_process_key() {
     switch (c) {
         case '\r':
             editor_insert_newline();
-            /* TODO */
             break;
         case BACKSPACE:
             editor_del_char();
@@ -418,7 +439,7 @@ void init_editor() {
     E.reserved_x = 4;
     E.reserved_y = 2;
     E.indent_x = 1;
-    E.cx = E.reserved_x + 1;
+    E.cx = E.reserved_x;
     E.cy = 0;
     E.numrows = 0;
     E.rowoff = 1;
