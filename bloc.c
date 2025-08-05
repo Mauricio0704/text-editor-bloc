@@ -12,6 +12,8 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 void editor_set_status_message(const char *msg, ...);
+char *editor_prompt(char *);
+
 
 typedef struct erow {
     int size;
@@ -245,8 +247,10 @@ void editor_open(char *filename) {
     fclose(fp);
 }
 
-void editor_save() {
-    if (E.filename == NULL) return;
+void editor_save() { 
+    if (E.filename == NULL)
+        E.filename = editor_prompt("Save as: %s");
+
     int len;
     char *buf = editor_rows_to_string(&len);
     int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
@@ -359,6 +363,7 @@ void editor_refresh_screen() {
 
     ab_append(&wbatch, "\x1b[?25l", 6); // Hide cursor
     ab_append(&wbatch, "\x1b[H", 3); // Position the cursor at the start of the screen
+    ab_append(&wbatch, "\x1b[32m", 5); // Color red
 
     editor_draw_rows(&wbatch);
     editor_draw_status_bar(&wbatch);
@@ -372,6 +377,50 @@ void editor_refresh_screen() {
 
     write(STDOUT_FILENO, wbatch.buf, wbatch.len); // Write everything at once
     ab_free(&wbatch);
+}
+
+void editor_move() {
+    char *nline = editor_prompt("Enter line: %s");
+    if (nline != NULL) {
+        int line = atoi(nline);
+        if (line >= 0 && line < E.numrows) {
+            E.cy = line;
+            E.rowoff = line;  // scroll so it's visible
+        } else {
+            editor_set_status_message("Invalid line number.");
+        }
+        free(nline);
+    }
+}
+
+
+char *editor_prompt(char *prompt) {
+    size_t bufsize = 128;
+    char *buf = malloc(bufsize);
+    size_t buflen = 0;
+    buf[0] = '\0';
+    while (1) {
+        editor_set_status_message(prompt, buf);
+        editor_refresh_screen();
+        int c = editor_read_key();
+        if (c == '\x1b') {
+            editor_set_status_message("");
+            free(buf);
+            return NULL;
+        } else if (c == '\r') {
+            if (buflen != 0) {
+                editor_set_status_message("");
+                return buf;
+            }
+            } else if (!iscntrl(c) && c < 128) {
+            if (buflen == bufsize - 1) {
+                bufsize *= 2;
+                buf = realloc(buf, bufsize);
+            }
+            buf[buflen++] = c;
+            buf[buflen] = '\0';
+        }
+    }
 }
 
 void editor_move_cursor(int key) {
@@ -414,6 +463,9 @@ void editor_process_key() {
             break;
         case BACKSPACE:
             editor_del_char();
+            break;
+        case CTRL_KEY('l'):
+            editor_move();
             break;
         case CTRL_KEY('s'):
             editor_save();
@@ -459,7 +511,7 @@ int main(int argc, char *argv[]) {
     if (argc >= 2)
         editor_open(argv[1]);
 
-    editor_set_status_message("HELP: Ctrl-s = save, Ctrl-e = exit");
+    editor_set_status_message("HELP: Ctrl-s = save, Ctrl-e = exit, Ctrl-l = go to");
     while (1) {
         editor_refresh_screen();
         editor_process_key();
