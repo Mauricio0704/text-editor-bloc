@@ -53,12 +53,12 @@ void die(const char *s) {
     exit(EXIT_FAILURE);
 }
 
-void disable_raw_mode() {
+void disable_raw_mode(void) {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_terminal_config) == -1)
         die("tcsetattr");
 }
 
-void enable_raw_mode() {
+void enable_raw_mode(void) {
     if (tcgetattr(STDIN_FILENO, &E.orig_terminal_config) == -1)
         die("tcgetattr");
     atexit(disable_raw_mode);
@@ -74,7 +74,7 @@ void enable_raw_mode() {
         die("tcsetattr");
 }
 
-int editor_read_key() {
+int editor_read_key(void) {
     char c;
     int nstatus;
     while ((nstatus = read(STDIN_FILENO, &c, 1)) != 1)
@@ -155,7 +155,7 @@ void editor_insert_char(int c) {
     E.cx++;
 }
 
-void editor_insert_newline() {
+void editor_insert_newline(void) {
     if (E.cx <= E.reserved_x) {
         editor_insert_row(E.cy, "", 0);
     } else {
@@ -181,7 +181,7 @@ void editor_row_del_char(erow *row, int at) {
     E.diffs++;
 }
 
-void editor_join_rows() {
+void editor_join_rows(void) {
     if (E.cy == 0) 
         return;
     erow *prev = &E.row[E.cy - 1];
@@ -199,7 +199,7 @@ void editor_join_rows() {
     E.cy--;
 }
 
-void editor_del_char() {
+void editor_del_char(void) {
     if (E.cy == E.numrows)
         return;
     erow *row = &E.row[E.cy];
@@ -247,7 +247,7 @@ void editor_open(char *filename) {
     fclose(fp);
 }
 
-void editor_save() { 
+void editor_save(void) { 
     if (E.filename == NULL)
         E.filename = editor_prompt("Save as: %s");
 
@@ -279,7 +279,7 @@ void ab_free(struct abuf *ab) {
     free(ab->buf);
 }
 
-void editor_scroll() {
+void editor_scroll(void) {
     if (E.cy < E.rowoff)
         E.rowoff = E.cy;
 
@@ -357,7 +357,7 @@ void editor_set_status_message(const char *fmt, ...) {
     va_end(ap);
 }
 
-void editor_refresh_screen() {
+void editor_refresh_screen(void) {
     editor_scroll();
     struct abuf wbatch = {NULL, 0}; 
 
@@ -379,7 +379,7 @@ void editor_refresh_screen() {
     ab_free(&wbatch);
 }
 
-void editor_move() {
+void editor_move(void) {
     char *nline = editor_prompt("Enter line: %s");
     if (nline != NULL) {
         int line = atoi(nline);
@@ -454,7 +454,7 @@ void editor_move_cursor(int key) {
     }
 }
 
-void editor_process_key() {
+void editor_process_key(void) {
     int c = editor_read_key();
 
     switch (c) {
@@ -487,7 +487,7 @@ void editor_process_key() {
     }
 }
 
-void init_editor() {
+void init_editor(void) {
     E.reserved_x = 4;
     E.reserved_y = 2;
     E.indent_x = 1;
