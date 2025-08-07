@@ -14,12 +14,22 @@
 void editor_set_status_message(const char *msg, ...);
 char *editor_prompt(char *);
 
+int OPENING_FILE = 0;
+
+enum row_status {
+    UNMODIFIED = 0,
+    NEW = 1,
+    MODIFIED = 2,
+    DELETED = 3
+};
 
 typedef struct erow {
     int size;
     int rsize;
     char *chars;
     char *torender;
+    char *original_chars;
+    int status;
 } erow;
 
 enum editor_key {
@@ -108,6 +118,19 @@ int get_window_size(int *rows, int *cols) {
     }
 }
 
+void editor_row_set_status(erow *row) {
+    if (row->original_chars == NULL) {
+        row->status = NEW;
+        return;
+    }
+    if (strcmp(row->original_chars, row->chars) == 0)
+        row->status = UNMODIFIED;
+    else if (row->status == UNMODIFIED)
+        row->status = MODIFIED;
+    else 
+        row->status = UNMODIFIED;
+}
+
 void editor_update_row(erow *row) {
     free(row->torender);
     row->torender = malloc(row->size + 1);
@@ -116,6 +139,7 @@ void editor_update_row(erow *row) {
         row->torender[idx++] = row->chars[j];
     row->torender[idx] = '\0';
     row->rsize = idx;
+    editor_row_set_status(row);
 }
 
 void editor_insert_row(int at, char *line, int linelen) {
@@ -129,11 +153,12 @@ void editor_insert_row(int at, char *line, int linelen) {
     E.row[at].chars[linelen] = '\0';
     E.row[at].rsize = 0;
     E.row[at].torender = NULL;
+    E.row[at].original_chars = OPENING_FILE ? strdup(E.row[at].chars) : NULL;
 
     editor_update_row(&E.row[at]);
 
     E.numrows++;
-    E.diffs++;
+    E.diffs++;    
 }
 
 void editor_row_insert_char(erow *row, int at, int c) {
@@ -307,10 +332,15 @@ void editor_draw_rows(struct abuf *wbatch) {
             int len = E.row[filerow-1].rsize;
             if (len > E.screencols) 
                 len = E.screencols;
+            if (E.row[filerow-1].status == 1)
+                ab_append(wbatch, "\x1b[32m", 5);
+            else if (E.row[filerow-1].status == 2)
+                ab_append(wbatch, "\x1b[34m", 5);
             ab_append(wbatch, E.row[filerow-1].torender, len);
             ab_append(wbatch, "\x1b[K", 3); // Erase the right part of the line
             ab_append(wbatch, "\r\n", 2);
         }
+        ab_append(wbatch, "\x1b[m", 3); // Reset text formatting
         ab_append(wbatch, "\x1b[K", 3); // Erase the right part of the line
     }
     ab_append(wbatch, "\x1b[K", 3);
@@ -363,14 +393,14 @@ void editor_refresh_screen(void) {
 
     ab_append(&wbatch, "\x1b[?25l", 6); // Hide cursor
     ab_append(&wbatch, "\x1b[H", 3); // Position the cursor at the start of the screen
-    ab_append(&wbatch, "\x1b[32m", 5); // Color red
+    // ab_append(&wbatch, "\x1b[32m", 5); // Color red
 
     editor_draw_rows(&wbatch);
     editor_draw_status_bar(&wbatch);
     editor_draw_message_bar(&wbatch);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 2, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx + 1); // Position the cursor
     ab_append(&wbatch, buf, strlen(buf));
 
     ab_append(&wbatch, "\x1b[?25h", 6); // Show cursor
@@ -501,17 +531,19 @@ void init_editor(void) {
     E.filename = NULL;
     if (get_window_size(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
-    E.screenrows -= 2;
 }
 
 int main(int argc, char *argv[]) {
     enable_raw_mode();
     init_editor();
     
-    if (argc >= 2)
+    if (argc >= 2) {
+        OPENING_FILE = 1;
         editor_open(argv[1]);
+    }
+    OPENING_FILE = 0;
 
-    editor_set_status_message("HELP: Ctrl-s = save, Ctrl-e = exit, Ctrl-l = go to");
+    editor_set_status_message("HELP: Ctrl-e = exit, Ctrl-s = save, Ctrl-l = go to");
     while (1) {
         editor_refresh_screen();
         editor_process_key();
