@@ -127,8 +127,6 @@ void editor_row_set_status(erow *row) {
         row->status = UNMODIFIED;
     else if (row->status == UNMODIFIED)
         row->status = MODIFIED;
-    else 
-        row->status = UNMODIFIED;
 }
 
 void editor_update_row(erow *row) {
@@ -157,7 +155,6 @@ void editor_insert_row(int at, char *line, int linelen) {
     if (OPENING_FILE)
         E.row[at].original_chars = strdup(E.row[at].chars);
     else {
-        free(E.row[at].original_chars);
         E.row[at].original_chars = NULL;
     }
 
@@ -324,7 +321,7 @@ void editor_draw_rows(struct abuf *wbatch) {
     for (int y = 1; y < E.screenrows - 1; y++) {
         filerow = y + E.rowoff;
         char curline[32];
-        int curlinelen = snprintf(curline, sizeof(curline), "%4d ", filerow);
+        int curlinelen = snprintf(curline, sizeof(curline), "%4d", filerow);
         ab_append(wbatch, curline, curlinelen);
         if (filerow > E.numrows) {
             if (E.numrows == 0 && y == 5) {
@@ -338,10 +335,18 @@ void editor_draw_rows(struct abuf *wbatch) {
             int len = E.row[filerow-1].rsize;
             if (len > E.screencols) 
                 len = E.screencols;
-            if (E.row[filerow-1].status == 1)
-                ab_append(wbatch, "\x1b[32m", 5);
-            else if (E.row[filerow-1].status == 2)
-                ab_append(wbatch, "\x1b[34m", 5);
+            if (E.row[filerow - 1].status != UNMODIFIED) {
+                int rowstatus = E.row[filerow - 1].status;
+                ab_append(wbatch, "\x1b[7m", 4);
+                if (rowstatus == NEW)
+                    ab_append(wbatch, "\x1b[32m", 5);
+                else if (rowstatus == MODIFIED)
+                    ab_append(wbatch, "\x1b[34m", 5);
+                ab_append(wbatch, " ", 1);
+                ab_append(wbatch, "\x1b[m", 3);
+            } else
+                ab_append(wbatch, " ", 1);
+            ab_append(wbatch, " ", 1);
             ab_append(wbatch, E.row[filerow-1].torender, len);
             ab_append(wbatch, "\x1b[K", 3); // Erase the right part of the line
             ab_append(wbatch, "\r\n", 2);
@@ -406,7 +411,7 @@ void editor_refresh_screen(void) {
     editor_draw_message_bar(&wbatch);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx + 1); // Position the cursor
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx + 3); // Position the cursor
     ab_append(&wbatch, buf, strlen(buf));
 
     ab_append(&wbatch, "\x1b[?25h", 6); // Show cursor
