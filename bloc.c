@@ -153,7 +153,13 @@ void editor_insert_row(int at, char *line, int linelen) {
     E.row[at].chars[linelen] = '\0';
     E.row[at].rsize = 0;
     E.row[at].torender = NULL;
-    E.row[at].original_chars = OPENING_FILE ? strdup(E.row[at].chars) : NULL;
+
+    if (OPENING_FILE)
+        E.row[at].original_chars = strdup(E.row[at].chars);
+    else {
+        free(E.row[at].original_chars);
+        E.row[at].original_chars = NULL;
+    }
 
     editor_update_row(&E.row[at]);
 
@@ -462,7 +468,7 @@ void editor_move_cursor(int key) {
                 E.cx--; 
             else if (E.cy > 0) {
                 E.cy--;
-                E.cx = E.row[E.cy].size + E.reserved_x + E.indent_x;
+                E.cx = E.row[E.cy].size + E.reserved_x + E.indent_x - 1;
             }
             break;
         case ARROW_RIGHT:
@@ -474,8 +480,11 @@ void editor_move_cursor(int key) {
             }
             break;
         case ARROW_UP:
-            if (E.cy != 0)
+            if (E.cy != 0) {
                 E.cy--;
+                if (E.cx > E.row[E.cy].size + E.reserved_x + E.indent_x - 1)
+                    E.cx = E.row[E.cy].size + E.reserved_x + E.indent_x - 1;
+            }
             break;
         case ARROW_DOWN:
             if (E.cy < E.numrows)
