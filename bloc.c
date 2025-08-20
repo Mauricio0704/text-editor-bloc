@@ -40,6 +40,16 @@ enum editor_key {
     ARROW_DOWN = 1003
 };
 
+typedef enum {INSERT, REDO} ActionType;
+
+typedef struct {
+    ActionType type;
+    char text;
+    int len;
+    int row;
+    int col;
+} Action;
+
 struct editorConfig {
     int cx, cy;
     int screenrows;
@@ -53,6 +63,10 @@ struct editorConfig {
     char *filename;
     char statusmsg[80];
     erow *row;
+    int numundos;
+    int numredos;
+    Action *undos;
+    Action *redos;
     struct termios orig_terminal_config;
 } E;
 
@@ -176,10 +190,30 @@ void editor_row_insert_char(erow *row, int at, int c) {
     editor_update_row(row);
 }
 
+void editor_row_del_char(erow *row, int at);
+
+void editor_undo(void) {
+    if (E.numundos < 1) 
+        return;
+    editor_row_del_char(&E.row[E.undos[E.numundos - 1].row], E.undos[E.numundos - 1].col);
+    E.numundos -= 1;
+}
+
+void editor_append_undo(int row, int col, char c, int len, ActionType type) {
+    E.undos = realloc(E.undos, (E.numundos + 1) * sizeof(Action));
+    E.undos[E.numundos].col = col;
+    E.undos[E.numundos].row = row;
+    E.undos[E.numundos].text = c;
+    E.undos[E.numundos].len = len;
+    E.undos[E.numundos].type = type;
+    E.numundos += 1;
+}
+
 void editor_insert_char(int c) {
     if (E.cy == E.numrows)
         editor_insert_row(E.numrows, "", 0);
     editor_row_insert_char(&E.row[E.cy], E.cx, c);
+    editor_append_undo(E.cy, E.cx, c, 1, INSERT);
     E.cx++;
 }
 
@@ -326,7 +360,7 @@ void editor_draw_rows(struct abuf *wbatch) {
         if (filerow > E.numrows) {
             if (E.numrows == 0 && y == 5) {
                 char welcome[80];
-                int welcomelen = snprintf(welcome, sizeof(welcome), "$ Bloc editor\r\n");
+                int welcomelen = snprintf(welcome, sizeof(welcome), "  Bloc editor\r\n");
                 ab_append(wbatch, welcome, welcomelen);
             } else {
                 ab_append(wbatch, "\r\n", 3);
@@ -511,6 +545,9 @@ void editor_process_key(void) {
         case CTRL_KEY('l'):
             editor_move();
             break;
+        case CTRL_KEY('z'):
+            editor_undo();
+            break;
         case CTRL_KEY('s'):
             editor_save();
             break;
@@ -543,6 +580,10 @@ void init_editor(void) {
     E.row = NULL;
     E.diffs = 0;
     E.filename = NULL;
+    E.numundos = 0;
+    E.numredos = 0;
+    E.undos = NULL;
+    E.redos = NULL;
     if (get_window_size(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
 }
@@ -557,7 +598,7 @@ int main(int argc, char *argv[]) {
     }
     OPENING_FILE = 0;
 
-    editor_set_status_message("HELP: Ctrl-e = exit, Ctrl-s = save, Ctrl-l = go to");
+    editor_set_status_message("HELP: Ctrl-e = exit, Ctrl-s = save, Ctrl-l = go to, Ctrl-z = undo, Ctrl-y = redo");
     while (1) {
         editor_refresh_screen();
         editor_process_key();
