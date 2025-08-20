@@ -40,7 +40,7 @@ enum editor_key {
     ARROW_DOWN = 1003
 };
 
-typedef enum {INSERT, REDO} ActionType;
+typedef enum {INSERT, DELETE, REDO} ActionType;
 
 typedef struct {
     ActionType type;
@@ -49,6 +49,8 @@ typedef struct {
     int row;
     int col;
 } Action;
+
+const int STACK_SIZE = 256;
 
 struct editorConfig {
     int cx, cy;
@@ -65,8 +67,8 @@ struct editorConfig {
     erow *row;
     int numundos;
     int numredos;
-    Action *undos;
-    Action *redos;
+    Action *undos[STACK_SIZE];
+    Action *redos[STACK_SIZE];
     struct termios orig_terminal_config;
 } E;
 
@@ -192,20 +194,37 @@ void editor_row_insert_char(erow *row, int at, int c) {
 
 void editor_row_del_char(erow *row, int at);
 
+Action *editor_pop_undo(void) {
+    if (E.numundos < 1)
+        return NULL;
+    return E.undos[E.numundos - 1];
+}
+
 void editor_undo(void) {
-    if (E.numundos < 1) 
+    if (E.numundos < 1)
         return;
-    editor_row_del_char(&E.row[E.undos[E.numundos - 1].row], E.undos[E.numundos - 1].col);
+    Action *lastundo = editor_pop_undo();
+    if (lastundo->type == INSERT) {
+        editor_row_del_char(&E.row[lastundo->row], lastundo->col);
+        E.cy = lastundo->row;
+        E.cx = lastundo->col;
+    } else if (lastundo->type == DELETE) {
+        editor_row_insert_char(&E.row[lastundo->row], lastundo->col, lastundo->text);
+        E.cy = lastundo->row;
+        E.cx = lastundo->col + 1;
+    }
+    free(lastundo);
     E.numundos -= 1;
 }
 
 void editor_append_undo(int row, int col, char c, int len, ActionType type) {
-    E.undos = realloc(E.undos, (E.numundos + 1) * sizeof(Action));
-    E.undos[E.numundos].col = col;
-    E.undos[E.numundos].row = row;
-    E.undos[E.numundos].text = c;
-    E.undos[E.numundos].len = len;
-    E.undos[E.numundos].type = type;
+    Action *undo = malloc(sizeof(Action));
+    undo->col = col;
+    undo->row = row;
+    undo->text = c;
+    undo->len = len;
+    undo->type = type;
+    E.undos[E.numundos] = undo;
     E.numundos += 1;
 }
 
@@ -235,7 +254,7 @@ void editor_insert_newline(void) {
 
 void editor_row_del_char(erow *row, int at) {
     at -= E.reserved_x;
-    if (at < 0 || at >= row->size) 
+    if (at < 0 || at >= row->size)
         return;
     memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
     row->size--;
@@ -266,7 +285,10 @@ void editor_del_char(void) {
         return;
     erow *row = &E.row[E.cy];
     if (E.cx > E.reserved_x + E.indent_x - 1) {
-        editor_row_del_char(row, E.cx - 1);
+        int del_at = E.cx - 1;
+        char deleted_char = row->chars[del_at - E.reserved_x];
+        editor_row_del_char(row, del_at);
+        editor_append_undo(E.cy, del_at, deleted_char, 1, DELETE);
         E.cx--;
     } else if (E.cx == E.reserved_x + E.indent_x - 1) {
         editor_join_rows();
@@ -582,8 +604,6 @@ void init_editor(void) {
     E.filename = NULL;
     E.numundos = 0;
     E.numredos = 0;
-    E.undos = NULL;
-    E.redos = NULL;
     if (get_window_size(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
 }
